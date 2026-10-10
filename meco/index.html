@@ -1,3 +1,17 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MECO · Melody to Harmony</title>  <script type="module" crossorigin src="/meco/assets/index-votXpokh.js"></script>
-  <link rel="stylesheet" crossorigin href="/meco/assets/index-CiW5b9nP.css">
-</head><body><div id="root"></div></body></html>
+<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MeCo - Melody to Chords</title></head><body><div id="root"></div><script>// Stable entry point: resolve the current hashed assets without caching the manifest.
+(async () => {
+  try {
+    const response = await fetch('./release.json?t=' + Date.now(), {cache: 'no-store'});
+    if (!response.ok) throw new Error('Unable to load release');
+    const release = await response.json();
+    for (const href of release.css) {
+      const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = href; document.head.append(link);
+    }
+    const script = document.createElement('script'); script.type = 'module'; script.src = release.js; document.head.append(script);
+    // Temporary diagnostic query strings never become the public sharing address.
+    if (location.search && window === window.top) history.replaceState(null, '', location.pathname + location.hash);
+  } catch (error) {
+    document.getElementById('root').textContent = 'Unable to load MeCo. Please refresh. / 加载失败，请刷新页面。';
+  }
+})();
+</script></body></html>
