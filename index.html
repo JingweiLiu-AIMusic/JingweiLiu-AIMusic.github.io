@@ -33,6 +33,10 @@ header{padding-left:0;padding-right:0;gap:24px}header nav{margin-left:auto;justi
 .meco-period time,.meco-period .research-type,.project-meta-row time,.project-meta-row .project-role{color:#237153;background:linear-gradient(110deg,#185442 0%,#288660 55%,#529744 100%);background-clip:text;-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .project-role small{font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);font-weight:600}
 .product-work .project-summary{max-width:none;width:100%;margin-top:8px;line-height:1.7}
+.product-overview{display:block;margin:0 0 32px;overflow:hidden;border:1px solid var(--line);border-radius:10px;background:#000;transition:box-shadow .2s}
+.product-overview:hover{box-shadow:0 8px 26px #242d2b18}
+.product-overview img{display:block;width:100%;height:auto}
+.product-overview:focus-visible{outline:3px solid #288660;outline-offset:5px}
 .product-videos{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:26px}
 .product-demo{margin:0;min-width:0}
 .product-demo video{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#15171b;border:1px solid var(--line);border-radius:8px}
@@ -61,6 +65,7 @@ header{padding-left:0;padding-right:0;gap:24px}header nav{margin-left:auto;justi
 <div class="project-meta-row"><time>2025–2026</time><span class="project-role">System Architect / Principal Engineer</span><span class="project-employer"><img src="assets/yinyuejia/huawei-logo.png" alt="Huawei" width="110" loading="lazy"></span></div>
 <p class="project-summary">Designed and led the development of music information retrieval (MIR) algorithms for Huawei Yinyuejia (音悦家), a professional music creation app. The work covered chord recognition, stem separation and AI accompaniment generation.</p>
 </div><a class="text-link" href="https://consumer.huawei.com/cn/mobileservices/yinyuejia/" target="_blank" rel="noopener">Official product page ↗</a></div>
+<a class="product-overview" href="https://consumer.huawei.com/cn/mobileservices/yinyuejia/" target="_blank" rel="noopener" aria-label="Explore Huawei Yinyuejia on the official product website (Chinese)"><img src="assets/yinyuejia/product-overview.png" alt="Huawei Yinyuejia professional music creation software: official product visual with a tablet showing the multitrack studio and virtual piano." loading="lazy"></a>
 <div class="product-videos">
 <figure class="product-demo">
 <video controls playsinline preload="none" poster="assets/yinyuejia/chord-recognition.jpg" aria-label="Huawei Yinyuejia chord recognition demonstration"><source src="assets/yinyuejia/chord-recognition.mp4" type="video/mp4">Your browser does not support video. <a href="assets/yinyuejia/chord-recognition.mp4">Watch the chord recognition demo</a>.</video>
