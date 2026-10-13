@@ -44,6 +44,17 @@ header{padding-left:0;padding-right:0;gap:24px}header nav{margin-left:auto;justi
 .product-demo h3{font-size:18px;letter-spacing:-.4px;font-weight:600;line-height:1.4}
 .product-demo p{font-size:13px;line-height:1.65;color:var(--muted);margin:8px 0 0}
 @media(max-width:800px){.product-videos{grid-template-columns:1fr;gap:30px}.product-work{padding-left:12px;padding-right:12px}.product-demo h3{font-size:18px}}
+
+.generation-layout{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:48px;align-items:start}
+.generation-layout h3{font-size:22px;margin:0 0 22px;letter-spacing:-.5px}
+.model-flow{padding:28px;background:#fff;border:1px solid var(--line);border-radius:12px;text-align:center;color:#283c40}
+.model-inputs{display:flex;gap:10px;justify-content:center}.model-inputs span{flex:1;padding:12px 5px;background:#eef3f8;border-radius:5px;font-size:13px}
+.model-stage{padding:16px 12px;border:1px solid #c6d7e9;background:#f1f6fb;border-radius:7px;font-weight:650;font-size:16px}.model-stage small{display:block;font-size:12px;font-weight:400;line-height:1.6;color:#5e737c;margin-top:5px}
+.model-arrow{display:block;color:#7e9995;font-size:21px;line-height:1.7}.model-stage.renderer{background:#f4f7f0;border-color:#ccd8be}.model-stage.output{background:#1e5547;border:0;color:white}.model-stage.output small{color:#d5e5df}
+.model-caption{color:var(--muted);font-size:13px;line-height:1.7;margin:16px 0 0}
+.song-demo{padding:20px 0;border-top:1px solid var(--line)}.song-demo:first-of-type{padding-top:0;border-top:0}.song-demo header{padding:0;margin:0 0 10px;border:0;display:flex;justify-content:space-between;align-items:center}.song-demo h4{font-size:20px;font-weight:650;margin:0}.song-demo header span{font-size:13px;color:var(--muted)}.song-demo p{font-size:14px;line-height:1.7;color:var(--muted);margin:0 0 12px}.song-demo audio{display:block;width:100%;height:42px}
+.launch-note{padding:18px 22px;border-left:3px solid #398a65;background:#edf3ed;margin:0 0 34px;color:#245a45;font-size:15px;line-height:1.6}.launch-note strong{display:block;font-weight:700}.launch-note span{font-size:13px;color:#597369}
+@media(max-width:800px){.generation-layout{grid-template-columns:1fr;gap:32px}.model-flow{padding:20px}.generation-layout h3{font-size:20px}}
 </style>
 </head>
 <body>
@@ -85,9 +96,29 @@ header{padding-left:0;padding-right:0;gap:24px}header nav{margin-left:auto;justi
 <div class="meco-heading"><div>
 <h2 id="music-generation-title"><span class="work-number">03</span><span>End-to-End Music Generation</span></h2>
 <div class="project-meta-row"><time>2023–2026</time><span class="project-employer"><img src="assets/yinyuejia/huawei-logo.png" alt="Huawei" width="110" loading="lazy"></span></div>
-<p class="project-summary"><strong>Launched on Huawei Music in 2024.</strong> Generate songs from lyrics, genre and voice inputs, with 44.1 kHz stereo output lasting 1–6 minutes. The architecture combines a Transformer generator with flow matching and a VAE decoder.</p>
+<p class="project-summary">Generate complete songs from lyrics, genre and voice inputs, with 44.1 kHz stereo output lasting 1–6 minutes.</p>
 </div></div>
-<figure class="product-demo"><img src="assets/yinyuejia/end-to-end-music-generation.png" alt="End-to-end music generation architecture, Ballad, Rock and Folk examples, and the Huawei Music launch in 2024." loading="lazy" style="display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:10px"></figure>
+<div class="launch-note"><strong>Commercially launched on Huawei Music in 2024</strong><span>Research and development: 2023–2026</span></div>
+<div class="generation-layout">
+<div><h3>Model Architecture</h3>
+<div class="model-flow" aria-label="Model architecture from conditioning inputs to stereo audio">
+<div class="model-inputs"><span>Genre Encoder</span><span>Lyrics Encoder</span><span>Voice Encoder</span></div>
+<span class="model-arrow" aria-hidden="true">↓</span>
+<div class="model-stage">Transformer Decoder (D1)<small>Sparse attention blocks<br>REPA semantic alignment via MLPs to MuQ and M-HuBERT</small></div>
+<span class="model-arrow" aria-hidden="true">↓</span>
+<div class="model-stage">25 Hz Codec Tokens</div>
+<span class="model-arrow" aria-hidden="true">↓</span>
+<div class="model-stage renderer">Flow Matching Decoder (D2)<small>Audio renderer</small></div>
+<span class="model-arrow" aria-hidden="true">↓</span>
+<div class="model-stage renderer">VAE Decoder</div>
+<span class="model-arrow" aria-hidden="true">↓</span>
+<div class="model-stage output">44.1 kHz Stereo Audio<small>1–6 minutes</small></div>
+</div><p class="model-caption">A Transformer generates codec tokens conditioned on genre, lyrics and voice. Flow matching and a VAE decoder render the final audio.</p></div>
+<div><h3>Listen to the Demos</h3>
+<article class="song-demo"><header><h4>Ballad</h4><span lang="zh">我想你了</span></header><p lang="zh">几年过去了，为什么我还是一样<br>夜深了没人说话，日子匆忙</p><audio controls preload="metadata" aria-label="Ballad music generation demo"><source src="assets/yinyuejia/ballad-demo.mp3" type="audio/mpeg"><a href="assets/yinyuejia/ballad-demo.mp3">Listen to Ballad</a></audio></article>
+<article class="song-demo"><header><h4>Rock</h4><span lang="zh">燃烧</span></header><p lang="zh">自由扑向平庸的炮火，火柴划过<br>理想的残骸点燃，他们说这叫自毁</p><audio controls preload="metadata" aria-label="Rock music generation demo"><source src="assets/yinyuejia/rock-demo.mp3" type="audio/mpeg"><a href="assets/yinyuejia/rock-demo.mp3">Listen to Rock</a></audio></article>
+<article class="song-demo"><header><h4>Folk</h4><span lang="zh">旅人</span></header><p lang="zh">绿皮火车，晃过二十三省<br>背包里装着过去地图和梦</p><audio controls preload="metadata" aria-label="Folk music generation demo"><source src="assets/yinyuejia/folk-demo.mp3" type="audio/mpeg"><a href="assets/yinyuejia/folk-demo.mp3">Listen to Folk</a></audio></article>
+</div></div>
 </section>
 </main>
 
