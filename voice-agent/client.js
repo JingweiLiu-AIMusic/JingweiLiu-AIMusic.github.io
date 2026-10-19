@@ -153,6 +153,7 @@ async function startVoice() {
   if(active) return stopVoice();
   if(busy) return status('请等待当前回复完成');
   try {
+    await prepareAudio();
     stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
     context=new AudioContext(); await context.resume();
     const analyser=context.createAnalyser(); analyser.fftSize=2048; context.createMediaStreamSource(stream).connect(analyser);
