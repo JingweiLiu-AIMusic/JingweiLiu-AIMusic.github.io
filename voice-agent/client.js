@@ -78,33 +78,72 @@ async function playResult(result,epoch) {
   }
   if(result.audio_error) status(result.audio_error,true);
 }
+let outputContext, nextAudioTime=0, turnAbort;
+const audioSources=new Set();
+async function prepareAudio() {
+  if(!outputContext||outputContext.state==='closed') outputContext=new AudioContext();
+  await outputContext.resume();
+}
+function cancelReply() {
+  turnAbort?.abort();
+  for(const source of audioSources) { try {source.stop();} catch {} }
+  audioSources.clear(); nextAudioTime=0;
+}
+function queuePCM(event) {
+  const raw=atob(event.pcm), bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));
+  const view=new DataView(bytes.buffer), buffer=outputContext.createBuffer(1,bytes.length/2,event.sample_rate);
+  const channel=buffer.getChannelData(0);
+  for(let i=0;i<channel.length;i++) channel[i]=view.getInt16(i*2,true)/32768;
+  const source=outputContext.createBufferSource();source.buffer=buffer;source.connect(outputContext.destination);
+  const when=Math.max(outputContext.currentTime+0.12,nextAudioTime);
+  source.start(when);nextAudioTime=when+buffer.duration;audioSources.add(source);
+  source.onended=()=>audioSources.delete(source);
+}
 async function sendTurn(path,options,fromAudio=false) {
   if(busy) return;
-  busy=true; $('send').disabled=true; const epoch=generation;
+  busy=true; $('send').disabled=true; $('interrupt').disabled=false; const epoch=generation;
+  const controller=new AbortController();turnAbort=controller;
+  const timeout=setTimeout(()=>controller.abort(),600000);
+  let reader;
   try {
-    status(fromAudio?'正在识别并回复…':'正在回复…');
-    let shown=false, played=0, heard=false;
-    const result=await runJob(path,options,epoch,async update=>{
-      if(epoch!==generation) return;
-      if(fromAudio && update.user_text && !heard) { transcript(update.user_text,true); heard=true; }
-      if(update.text && !shown) { transcript(update.text,false); shown=true; }
-      if(update.stage==='transcribing') status('正在识别语音…');
-      else if(update.stage==='thinking') status('正在生成回复…');
-      else if(update.stage==='synthesizing') status('文字已就绪，正在分句生成语音…');
-      while(played<(update.audio_count||0) && epoch===generation) {
-        await playResult({job:update.job,chunkIndex:played,has_audio:true},epoch); played++;
+    await prepareAudio();nextAudioTime=0;
+    status(fromAudio?'正在识别语音…':'正在生成回复…');
+    const response=await api(path.replace('/jobs/','/realtime/'),{...options,signal:controller.signal});
+    reader=response.body.getReader();const decoder=new TextDecoder();let pending='', paragraph,done=false;
+    while(true) {
+      const packet=await reader.read();if(packet.done)break;
+      if(epoch!==generation)throw Error('对话已结束');
+      pending+=decoder.decode(packet.value,{stream:true});
+      let newline;
+      while((newline=pending.indexOf('\n'))>=0) {
+        const line=pending.slice(0,newline);pending=pending.slice(newline+1);if(!line)continue;
+        const event=JSON.parse(line);
+        if(event.type==='transcript')transcript(event.text,true);
+        if(event.type==='text') {
+          if(!paragraph) {transcript('',false);paragraph=$('transcript').lastElementChild;}
+          paragraph.textContent+=event.delta;
+          $('transcript').scrollTop=$('transcript').scrollHeight;
+        }
+        if(event.type==='audio') {queuePCM(event);status('正在回复…');}
+        if(event.type==='error')throw Error(event.detail);
+        if(event.type==='done')done=true;
       }
-    });
-    if(epoch!==generation) return;
-    if(!result.chunked) await playResult({...result,text:shown?'':result.text},epoch);
-    if(result.audio_error) status(result.audio_error,true);
-    memoryStatus().catch(()=>{});
-    if(epoch===generation) status(active?'正在听，请继续说话。':'已回复。');
-  } catch(error) { if(epoch===generation) status(error.message,true); }
-  finally { busy=false; $('send').disabled=false; }
+    }
+    if(!done)throw Error('连接中断，请重试');
+    while(audioSources.size&&epoch===generation)await new Promise(resolve=>setTimeout(resolve,80));
+    if(epoch===generation) {
+      memoryStatus().catch(()=>{});
+      status(active?'正在听，请继续说话。':'已回复。');
+    }
+  } catch(error) {
+    cancelReply();if(epoch===generation)status(error.message,true);
+  } finally {
+    clearTimeout(timeout);reader?.releaseLock();if(turnAbort===controller)turnAbort=null;
+    busy=false; $('send').disabled=false; $('interrupt').disabled=true;
+  }
 }
 function stopVoice(consolidate=true) {
-  active=false; generation++; clearInterval(detector);
+  active=false; generation++; cancelReply(); clearInterval(detector);
   if(recorder && recorder.state!=='inactive') { recorder.onstop=null; recorder.stop(); }
   stream?.getTracks().forEach(track=>track.stop()); context?.close(); playback.pause();
   $('call').textContent='开始语音对话'; $('mute').disabled=true; $('orb').classList.remove('active'); status('语音对话已结束');
@@ -141,7 +180,7 @@ async function startVoice() {
       analyser.getFloatTimeDomainData(samples);
       const rms=Math.sqrt(samples.reduce((sum,x)=>sum+x*x,0)/samples.length);
       if(rms>0.018) { heard=true; lastSound=Date.now(); }
-      if(recorder?.state==='recording' && ((heard&&Date.now()-lastSound>1100&&Date.now()-start>1500)||Date.now()-start>30000)) recorder.stop();
+      if(recorder?.state==='recording' && ((heard&&Date.now()-lastSound>550&&Date.now()-start>750)||Date.now()-start>30000)) recorder.stop();
     },100);
   } catch(error) { stopVoice(false); status('无法打开麦克风：'+error.message,true); }
 }
@@ -157,8 +196,9 @@ async function finishConversation() {
   } catch(error) { if(epoch===generation && !active) status('聊天原文已保存；记忆整理状态：'+error.message,true); }
   finally { $('endSession').disabled=false; }
 }
-$('endSession').onclick=()=>{ if(active) stopVoice(); else {generation++; playback.pause(); finishConversation();} };
+$('endSession').onclick=()=>{ if(active) stopVoice(); else {generation++; cancelReply(); playback.pause(); finishConversation();} };
 $('call').onclick=startVoice;
+$('interrupt').onclick=()=>{generation++;cancelReply();status(active?'已打断，正在听。':'已打断回复。');};
 $('textCall').onclick=()=>{ $('message').focus(); status('输入文字后点击 Send，即可收到语音回复。'); };
 $('mute').onclick=()=>{
   if(!stream) return;
