@@ -1,0 +1,169 @@
+const $ = id => document.getElementById(id);
+let endpoint = '', key = sessionStorage.getItem('voiceAccessKey') || '', active = false, busy = false, stream, recorder, context, detector, audioUrl, generation = 0;
+let callVoice, callPrompt;
+const session = crypto.randomUUID();
+const playback = new Audio();
+function status(text, error=false) { $('status').textContent=text; $('status').className=error?'error':''; }
+async function api(path, options={}) {
+  if (!endpoint) throw Error('服务器连接尚未就绪');
+  const response=await fetch(endpoint+path,{...options,headers:{...options.headers,Authorization:'Bearer '+key},cache:'no-store'});
+  if (!response.ok) {
+    if(response.status===401) { sessionStorage.removeItem('voiceAccessKey'); $('accessPanel').hidden=false; throw Error('访问密钥无效，请重新连接'); }
+    let message='请求失败 ('+response.status+')';
+    try { const data=await response.json(); message=typeof data.detail==='string'?data.detail:message; } catch {}
+    throw Error(message);
+  }
+  return response;
+}
+async function json(path,options) { return (await api(path,options)).json(); }
+async function runJob(path,options,epoch=generation) {
+  const {job}=await json(path,options);
+  const deadline=Date.now()+650000;
+  while(Date.now()<deadline) {
+    if(epoch!==generation) throw Error('已结束本次操作');
+    const result=await json('/jobs/'+job);
+    if(result.status==='error') throw Error(result.detail);
+    if(result.status==='done') return {...result,job};
+    await new Promise(resolve=>setTimeout(resolve,1200));
+  }
+  throw Error('处理超时，请稍后重试');
+}
+function post(data) { return {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}; }
+function transcript(text,local) {
+  const p=document.createElement('p'); p.className=local?'user':'agent'; p.textContent=(local?'You: ':'Jennifer: ')+text;
+  $('transcript').append(p); $('transcript').scrollTop=$('transcript').scrollHeight;
+}
+async function loadVoices() {
+  const voices=await json('/data/voices');
+  for(const option of [...$('voice').options]) if(option.dataset.custom) option.remove();
+  for(const voice of voices) { const option=new Option(voice.name+' · reference voice',voice.id); option.dataset.custom='1'; $('voice').add(option); }
+}
+async function health() {
+  try {
+    const response=await fetch('./connection.json?t='+Date.now(),{cache:'no-store'});
+    if(!response.ok) throw Error('配置不可用');
+    const config=await response.json();
+    if(!/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/.test(config.api)) throw Error('连接地址无效');
+    endpoint=config.api;
+    const h=await (await fetch(endpoint+'/health',{cache:'no-store',signal:AbortSignal.timeout(12000)})).json();
+    $('health').textContent=h.llm&&h.speech?'服务器在线 · 语音模型就绪':'服务器在线 · 模型准备中';
+  } catch { $('health').textContent='服务器离线 · 请让 Codex 启动服务'; }
+}
+async function memoryStatus(loadHistory=false) {
+  const memory=await json('/data/memory');
+  $('memoryStatus').textContent='已保存 '+memory.messages+' 条消息';
+  $('memoryText').textContent=memory.summary||'暂无长期记忆';
+  if(loadHistory && !$('transcript').childElementCount) for(const item of memory.recent) transcript(item.text,item.role==='user');
+}
+async function unlock() {
+  await json('/session'); sessionStorage.setItem('voiceAccessKey',key);
+  $('accessPanel').hidden=true; $('workspace').inert=false;
+  await loadVoices(); await memoryStatus(true); status('已连接。可以开始语音或文字对话。');
+}
+$('accessForm').onsubmit=async event=>{ event.preventDefault(); key=$('accessKey').value.trim(); try { await unlock(); $('accessKey').value=''; } catch(error) { $('accessStatus').textContent=error.message; } };
+async function playResult(result,epoch) {
+  if(epoch!==generation) return;
+  if(result.text) transcript(result.text,false);
+  if(result.has_audio) {
+    const blob=await (await api('/jobs/'+result.job+'/audio')).blob();
+    if(epoch!==generation) return;
+    if(audioUrl) URL.revokeObjectURL(audioUrl);
+    audioUrl=URL.createObjectURL(blob); playback.src=audioUrl;
+    $('sample').src=audioUrl; $('sample').hidden=false;
+    status('正在回复…');
+    try { await playback.play(); await new Promise(resolve=>{ playback.onended=resolve; playback.onerror=resolve; playback.onpause=resolve; }); }
+    catch { status('浏览器暂停了自动播放，可点击试听播放器播放。'); }
+  }
+  if(result.audio_error) status(result.audio_error,true);
+}
+async function sendTurn(path,options,fromAudio=false) {
+  if(busy) return;
+  busy=true; $('send').disabled=true; const epoch=generation;
+  try {
+    status(fromAudio?'正在识别并回复…':'正在回复…');
+    const result=await runJob(path,options,epoch);
+    if(epoch!==generation) return;
+    if(fromAudio && result.user_text) transcript(result.user_text,true);
+    await playResult(result,epoch);
+    await memoryStatus();
+    if(epoch===generation) status(active?'正在听，请继续说话。':'已回复。');
+  } catch(error) { if(epoch===generation) status(error.message,true); }
+  finally { busy=false; $('send').disabled=false; }
+}
+function stopVoice() {
+  active=false; generation++; clearInterval(detector);
+  if(recorder && recorder.state!=='inactive') { recorder.onstop=null; recorder.stop(); }
+  stream?.getTracks().forEach(track=>track.stop()); context?.close(); playback.pause();
+  $('call').textContent='开始语音对话'; $('mute').disabled=true; $('orb').classList.remove('active'); status('语音对话已结束');
+}
+async function startVoice() {
+  if(active) return stopVoice();
+  if(busy) return status('请等待当前回复完成');
+  try {
+    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+    context=new AudioContext(); await context.resume();
+    const analyser=context.createAnalyser(); analyser.fftSize=2048; context.createMediaStreamSource(stream).connect(analyser);
+    const samples=new Float32Array(analyser.fftSize);
+    active=true; callVoice=$('voice').value; callPrompt=$('prompt').value;
+    $('call').textContent='结束语音对话'; $('mute').disabled=false; $('mute').textContent='静音'; $('orb').classList.add('active');
+    status('正在听。说完后会自动识别并回复。');
+    let lastSound=0,start=0,heard=false;
+    function record() {
+      if(!active||busy||!stream.getAudioTracks()[0].enabled) return;
+      const parts=[];
+      const mime=['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(type=>MediaRecorder.isTypeSupported(type));
+      recorder=new MediaRecorder(stream,mime?{mimeType:mime}:{});
+      recorder.ondataavailable=e=>{if(e.data.size) parts.push(e.data);};
+      recorder.onstop=()=>{
+        if(!active||!heard) return;
+        const blob=new Blob(parts,{type:recorder.mimeType});
+        sendTurn('/jobs/recording',{method:'POST',headers:{'X-Voice':encodeURIComponent(callVoice),'X-Session':session,'X-Prompt':encodeURIComponent(callPrompt)},body:blob},true);
+      };
+      start=Date.now(); lastSound=start; heard=false; recorder.start();
+    }
+    detector=setInterval(()=>{
+      if(!active||busy||!stream.getAudioTracks()[0].enabled) return;
+      if(!recorder||recorder.state==='inactive') record();
+      analyser.getFloatTimeDomainData(samples);
+      const rms=Math.sqrt(samples.reduce((sum,x)=>sum+x*x,0)/samples.length);
+      if(rms>0.018) { heard=true; lastSound=Date.now(); }
+      if(recorder?.state==='recording' && ((heard&&Date.now()-lastSound>1100&&Date.now()-start>1500)||Date.now()-start>30000)) recorder.stop();
+    },100);
+  } catch(error) { stopVoice(); status('无法打开麦克风：'+error.message,true); }
+}
+$('call').onclick=startVoice;
+$('textCall').onclick=()=>{ $('message').focus(); status('输入文字后点击 Send，即可收到语音回复。'); };
+$('mute').onclick=()=>{
+  if(!stream) return;
+  const enabled=!stream.getAudioTracks()[0].enabled;
+  stream.getAudioTracks().forEach(track=>track.enabled=enabled);
+  if(!enabled&&recorder?.state==='recording') { recorder.onstop=null; recorder.stop(); }
+  $('mute').textContent=enabled?'静音':'开启麦克风'; status(enabled?'正在听…':'麦克风已静音');
+};
+$('messageForm').onsubmit=event=>{
+  event.preventDefault(); const text=$('message').value.trim(); if(!text||busy) return;
+  if(recorder?.state==='recording') {recorder.onstop=null;recorder.stop();}
+  transcript(text,true); $('message').value='';
+  sendTurn('/jobs/turn',post({text,voice:active?callVoice:$('voice').value,prompt:active?callPrompt:$('prompt').value,session}));
+};
+$('preview').onclick=async()=>{
+  if(active||busy) return status('请先结束语音对话并等待回复完成，再试听音色。');
+  $('preview').disabled=true;
+  try { status('正在生成试听…'); const result=await runJob('/jobs/preview',post({voice:$('voice').value,text:$('previewText').value.trim()})); await playResult(result,generation); status('试听已生成'); }
+  catch(error) {status(error.message,true);} finally {$('preview').disabled=false;}
+};
+$('clone').onsubmit=async event=>{
+  event.preventDefault(); const file=$('referenceFile').files[0];
+  if(!file||!file.size||file.size>25*1024*1024) { $('cloneStatus').textContent='请选择非空、最大 25MB 的音频文件'; return; }
+  $('cloneButton').disabled=true; $('cloneStatus').textContent='正在上传并处理，请稍候…';
+  try {
+    const result=await runJob('/jobs/voice',{method:'POST',body:new FormData(event.target)});
+    await loadVoices(); $('voice').value=result.voice.id; event.target.reset();
+    $('cloneStatus').textContent='已创建并选中：'+result.voice.name+'。可试听；下一次语音对话生效。';
+  } catch(error) { $('cloneStatus').textContent=error.message; } finally { $('cloneButton').disabled=false; }
+};
+$('loadPersona').onclick=async()=>{try { $('personaText').value=await (await api('/data/persona')).text(); $('savePersona').disabled=false; $('personaStatus').textContent='已加载服务器中的人设文件'; } catch(e) {$('personaStatus').textContent=e.message;} };
+$('savePersona').onclick=async()=>{ $('savePersona').disabled=true; try {await api('/data/persona',{method:'PUT',headers:{'Content-Type':'text/plain;charset=utf-8'},body:$('personaText').value}); $('personaStatus').textContent='已保存，后续回复生效';} catch(e) {$('personaStatus').textContent=e.message;} finally {$('savePersona').disabled=false;} };
+$('exportMemory').onclick=async event=>{event.preventDefault();try {const blob=await (await api('/data/memory/export')).blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='companion-memory.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){status(e.message,true);} };
+window.addEventListener('beforeunload',()=>stream?.getTracks().forEach(track=>track.stop()));
+(async()=>{await health();if(key)try{await unlock();}catch{sessionStorage.removeItem('voiceAccessKey');}setInterval(health,30000);})();
