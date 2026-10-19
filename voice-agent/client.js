@@ -6,7 +6,7 @@ const playback = new Audio();
 function status(text, error=false) { $('status').textContent=text; $('status').className=error?'error':''; }
 async function api(path, options={}) {
   if (!endpoint) throw Error('服务器连接尚未就绪');
-  const response=await fetch(endpoint+path,{...options,headers:{...options.headers,Authorization:'Bearer '+key},cache:'no-store'});
+  const response=await fetch(endpoint+path,{...options,signal:options.signal||AbortSignal.timeout(options.body instanceof FormData?120000:30000),headers:{...options.headers,Authorization:'Bearer '+key},cache:'no-store'});
   if (!response.ok) {
     if(response.status===401) { sessionStorage.removeItem('voiceAccessKey'); $('accessPanel').hidden=false; throw Error('访问密钥无效，请重新连接'); }
     let message='请求失败 ('+response.status+')';
@@ -16,15 +16,16 @@ async function api(path, options={}) {
   return response;
 }
 async function json(path,options) { return (await api(path,options)).json(); }
-async function runJob(path,options,epoch=generation) {
+async function runJob(path,options,epoch=generation,onProgress=null) {
   const {job}=await json(path,options);
   const deadline=Date.now()+650000;
   while(Date.now()<deadline) {
     if(epoch!==generation) throw Error('已结束本次操作');
     const result=await json('/jobs/'+job);
+    if(onProgress) await onProgress({...result,job});
     if(result.status==='error') throw Error(result.detail);
     if(result.status==='done') return {...result,job};
-    await new Promise(resolve=>setTimeout(resolve,1200));
+    await new Promise(resolve=>setTimeout(resolve,400));
   }
   throw Error('处理超时，请稍后重试');
 }
@@ -58,14 +59,15 @@ async function memoryStatus(loadHistory=false) {
 async function unlock() {
   await json('/session'); sessionStorage.setItem('voiceAccessKey',key);
   $('accessPanel').hidden=true; $('workspace').inert=false;
-  await loadVoices(); await memoryStatus(true); status('已连接。可以开始语音或文字对话。');
+  status('已连接。可以开始语音或文字对话。');
+  await Promise.allSettled([loadVoices(),memoryStatus(true)]);
 }
 $('accessForm').onsubmit=async event=>{ event.preventDefault(); key=$('accessKey').value.trim(); try { await unlock(); $('accessKey').value=''; } catch(error) { $('accessStatus').textContent=error.message; } };
 async function playResult(result,epoch) {
   if(epoch!==generation) return;
   if(result.text) transcript(result.text,false);
   if(result.has_audio) {
-    const blob=await (await api('/jobs/'+result.job+'/audio')).blob();
+    const blob=await (await api('/jobs/'+result.job+'/audio'+(result.chunkIndex===undefined?'':'/'+result.chunkIndex))).blob();
     if(epoch!==generation) return;
     if(audioUrl) URL.revokeObjectURL(audioUrl);
     audioUrl=URL.createObjectURL(blob); playback.src=audioUrl;
@@ -81,20 +83,32 @@ async function sendTurn(path,options,fromAudio=false) {
   busy=true; $('send').disabled=true; const epoch=generation;
   try {
     status(fromAudio?'正在识别并回复…':'正在回复…');
-    const result=await runJob(path,options,epoch);
+    let shown=false, played=0, heard=false;
+    const result=await runJob(path,options,epoch,async update=>{
+      if(epoch!==generation) return;
+      if(fromAudio && update.user_text && !heard) { transcript(update.user_text,true); heard=true; }
+      if(update.text && !shown) { transcript(update.text,false); shown=true; }
+      if(update.stage==='transcribing') status('正在识别语音…');
+      else if(update.stage==='thinking') status('正在生成回复…');
+      else if(update.stage==='synthesizing') status('文字已就绪，正在分句生成语音…');
+      while(played<(update.audio_count||0) && epoch===generation) {
+        await playResult({job:update.job,chunkIndex:played,has_audio:true},epoch); played++;
+      }
+    });
     if(epoch!==generation) return;
-    if(fromAudio && result.user_text) transcript(result.user_text,true);
-    await playResult(result,epoch);
-    await memoryStatus();
+    if(!result.chunked) await playResult({...result,text:shown?'':result.text},epoch);
+    if(result.audio_error) status(result.audio_error,true);
+    memoryStatus().catch(()=>{});
     if(epoch===generation) status(active?'正在听，请继续说话。':'已回复。');
   } catch(error) { if(epoch===generation) status(error.message,true); }
   finally { busy=false; $('send').disabled=false; }
 }
-function stopVoice() {
+function stopVoice(consolidate=true) {
   active=false; generation++; clearInterval(detector);
   if(recorder && recorder.state!=='inactive') { recorder.onstop=null; recorder.stop(); }
   stream?.getTracks().forEach(track=>track.stop()); context?.close(); playback.pause();
   $('call').textContent='开始语音对话'; $('mute').disabled=true; $('orb').classList.remove('active'); status('语音对话已结束');
+  if(consolidate) finishConversation();
 }
 async function startVoice() {
   if(active) return stopVoice();
@@ -129,8 +143,21 @@ async function startVoice() {
       if(rms>0.018) { heard=true; lastSound=Date.now(); }
       if(recorder?.state==='recording' && ((heard&&Date.now()-lastSound>1100&&Date.now()-start>1500)||Date.now()-start>30000)) recorder.stop();
     },100);
-  } catch(error) { stopVoice(); status('无法打开麦克风：'+error.message,true); }
+  } catch(error) { stopVoice(false); status('无法打开麦克风：'+error.message,true); }
 }
+async function finishConversation() {
+  if($('endSession').disabled) return;
+  $('endSession').disabled=true;
+  const epoch=generation;
+  status('本轮对话已结束，正在整理长期记忆…');
+  try {
+    await runJob('/session/end',{method:'POST'},epoch);
+    if(epoch===generation && !active) status('本轮对话已结束，长期记忆已更新。');
+    memoryStatus().catch(()=>{});
+  } catch(error) { if(epoch===generation && !active) status('聊天原文已保存；记忆整理状态：'+error.message,true); }
+  finally { $('endSession').disabled=false; }
+}
+$('endSession').onclick=()=>{ if(active) stopVoice(); else {generation++; playback.pause(); finishConversation();} };
 $('call').onclick=startVoice;
 $('textCall').onclick=()=>{ $('message').focus(); status('输入文字后点击 Send，即可收到语音回复。'); };
 $('mute').onclick=()=>{
