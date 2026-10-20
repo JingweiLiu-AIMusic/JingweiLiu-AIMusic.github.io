@@ -94,7 +94,7 @@ function queuePCM(event) {
   const view=new DataView(bytes.buffer), buffer=outputContext.createBuffer(1,bytes.length/2,event.sample_rate);
   const channel=buffer.getChannelData(0);
   for(let i=0;i<channel.length;i++) channel[i]=view.getInt16(i*2,true)/32768;
-  if(audioQueue.firstArrival===null && event.playback_buffer_s===0.6)audioQueue.target=0.6;
+  if(audioQueue.firstArrival===null && Number.isFinite(event.playback_buffer_s))audioQueue.target=Math.min(8,Math.max(0.5,event.playback_buffer_s));
   audioQueue.push(buffer);
 }
 async function sendTurn(path,options,fromAudio=false) {
