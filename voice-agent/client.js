@@ -1,6 +1,7 @@
 const $ = id => document.getElementById(id);
 let endpoint = '', key = sessionStorage.getItem('voiceAccessKey') || '', active = false, busy = false, stream, recorder, context, detector, audioUrl, generation = 0;
 let callVoice, callPrompt;
+let personaLoaded=false, personaDirty=false, personaBusy=false;
 let session = crypto.randomUUID();
 const playback = new Audio();
 function status(text, error=false) { $('status').textContent=text; $('status').className=error?'error':''; }
@@ -62,7 +63,7 @@ async function unlock() {
   await json('/session'); sessionStorage.setItem('voiceAccessKey',key);
   $('accessPanel').hidden=true; $('workspace').inert=false;
   status('已连接。可以开始语音或文字对话。');
-  await Promise.allSettled([loadVoices(),memoryStatus(true),resumeFineTune()]);
+  await Promise.allSettled([loadVoices(),memoryStatus(true),resumeFineTune(),loadPersona()]);
 }
 $('accessForm').onsubmit=async event=>{ event.preventDefault(); key=$('accessKey').value.trim(); try { await unlock(); $('accessKey').value=''; } catch(error) { $('accessStatus').textContent=error.message; } };
 async function playResult(result,epoch) {
@@ -247,8 +248,50 @@ $('clone').onsubmit=async event=>{
     $('cloneStatus').textContent='已创建并选中：'+result.voice.name+'。可试听；下一次语音对话生效。';
   } catch(error) { $('cloneStatus').textContent=error.message; } finally { $('cloneButton').disabled=false; }
 };
-$('loadPersona').onclick=async()=>{try { $('personaText').value=await (await api('/data/persona')).text(); $('savePersona').disabled=false; $('personaStatus').textContent='已加载服务器中的人设文件'; } catch(e) {$('personaStatus').textContent=e.message;} };
-$('savePersona').onclick=async()=>{ $('savePersona').disabled=true; try {await api('/data/persona',{method:'PUT',headers:{'Content-Type':'text/plain;charset=utf-8'},body:$('personaText').value}); $('personaStatus').textContent='已保存，后续回复生效';} catch(e) {$('personaStatus').textContent=e.message;} finally {$('savePersona').disabled=false;} };
+async function loadPersona() {
+  if(personaBusy || personaDirty)return;
+  personaBusy=true; $('loadPersona').disabled=true; $('savePersona').disabled=true;
+  $('personaText').readOnly=true; $('personaStatus').textContent='正在加载人设…';
+  try {
+    $('personaText').value=await (await api('/data/persona')).text();
+    personaLoaded=true; personaDirty=false;
+    $('personaStatus').textContent='已加载，可直接编辑。';
+  } catch(e) { $('personaStatus').textContent='加载失败：'+e.message; }
+  finally {
+    personaBusy=false; $('loadPersona').disabled=false;
+    $('personaText').readOnly=!personaLoaded;
+    $('savePersona').disabled=!personaLoaded || !personaDirty;
+  }
+}
+$('loadPersona').onclick=async()=>{
+  if(personaBusy)return;
+  if(personaDirty && !confirm('重新加载会丢弃尚未保存的修改，是否继续？'))return;
+  // Keep the draft if the refresh fails.
+  const wasDirty=personaDirty; personaDirty=false;
+  await loadPersona();
+  if($('personaStatus').textContent.startsWith('加载失败：')) {
+    personaDirty=wasDirty; $('savePersona').disabled=!personaLoaded || !personaDirty;
+  }
+};
+$('personaText').oninput=()=>{
+  personaDirty=true; $('savePersona').disabled=!personaLoaded || personaBusy;
+  $('personaStatus').textContent='有未保存的修改';
+};
+$('savePersona').onclick=async()=>{
+  if(!personaLoaded || personaBusy)return;
+  const draft=$('personaText').value;
+  personaBusy=true; $('savePersona').disabled=true; $('loadPersona').disabled=true;
+  $('personaStatus').textContent='正在保存…';
+  try {
+    await api('/data/persona',{method:'PUT',headers:{'Content-Type':'text/plain;charset=utf-8'},body:draft});
+    personaDirty=$('personaText').value!==draft;
+    $('personaStatus').textContent=personaDirty?'已保存提交的内容，还有新的修改未保存':'已保存，后续对话读取新内容';
+  } catch(e) { $('personaStatus').textContent='保存失败：'+e.message; }
+  finally {
+    personaBusy=false; $('loadPersona').disabled=false;
+    $('savePersona').disabled=!personaDirty;
+  }
+};
 $('exportMemory').onclick=async event=>{event.preventDefault();try {const blob=await (await api('/data/memory/export')).blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='companion-memory.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){status(e.message,true);} };
 window.addEventListener('beforeunload',()=>stream?.getTracks().forEach(track=>track.stop()));
 (async()=>{await health();if(key)try{await unlock();}catch{sessionStorage.removeItem('voiceAccessKey');}setInterval(health,30000);})();
