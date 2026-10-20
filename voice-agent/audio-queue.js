@@ -23,7 +23,7 @@ class StreamingAudioQueue {
       const elapsed=now-(this.firstArrival??now);
       const rate=elapsed>0.5?this.total/elapsed:1;
       const target=Math.min(8,Math.max(this.target,rate<1?this.target+(1-rate)*12:this.target));
-      if(!this.finished && (this.seconds<target || elapsed<1.5)) {
+      if(!this.finished && (this.seconds<target || elapsed<(this.target>=4?1.5:0))) {
         this.onState('buffering');return;
       }
       if(!this.pending.length)return;
