@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 let endpoint = '', key = sessionStorage.getItem('voiceAccessKey') || '', active = false, busy = false, stream, recorder, context, detector, audioUrl, generation = 0;
 let callVoice, callPrompt;
-const session = crypto.randomUUID();
+let session = crypto.randomUUID();
 const playback = new Audio();
 function status(text, error=false) { $('status').textContent=text; $('status').className=error?'error':''; }
 async function api(path, options={}) {
@@ -51,7 +51,9 @@ async function health() {
   } catch { $('health').textContent='服务器离线 · 请让 Codex 启动服务'; }
 }
 async function memoryStatus(loadHistory=false) {
+  const epoch=generation;
   const memory=await json('/data/memory');
+  if(epoch!==generation)return;
   $('memoryStatus').textContent='已保存 '+memory.messages+' 条消息';
   $('memoryText').textContent=memory.summary||'暂无长期记忆';
   if(loadHistory && !$('transcript').childElementCount) for(const item of memory.recent) transcript(item.text,item.role==='user');
@@ -193,6 +195,24 @@ async function finishConversation() {
   } catch(error) { if(epoch===generation && !active) status('聊天原文已保存；记忆整理状态：'+error.message,true); }
   finally { $('endSession').disabled=false; }
 }
+$('restartConversation').onclick=async()=>{
+  if(!confirm('重新开始会永久删除所有聊天记录和长期记忆，人设和音色保留。继续吗？'))return;
+  const button=$('restartConversation');button.disabled=true;
+  stopVoice(false);playback.pause();
+  $('send').disabled=true;$('call').disabled=true;$('endSession').disabled=true;
+  status('正在清空对话…');
+  try {
+    await json('/session/reset',{method:'POST'});
+    while(busy)await new Promise(resolve=>setTimeout(resolve,30));
+    session=crypto.randomUUID();
+    $('transcript').replaceChildren();$('message').value='';
+    $('memoryStatus').textContent='已保存 0 条消息';$('memoryText').textContent='暂无长期记忆';
+    if(audioUrl){URL.revokeObjectURL(audioUrl);audioUrl=null;}
+    playback.removeAttribute('src');$('sample').removeAttribute('src');$('sample').hidden=true;
+    status('旧对话和长期记忆已删除，可以开始新对话。');
+  } catch(error){status('重新开始失败：'+error.message,true);}
+  finally {button.disabled=false;$('send').disabled=false;$('call').disabled=false;$('endSession').disabled=false;}
+};
 $('endSession').onclick=()=>{ if(active) stopVoice(); else {generation++; cancelReply(); playback.pause(); finishConversation();} };
 $('call').onclick=startVoice;
 $('interrupt').onclick=()=>{generation++;cancelReply();status(active?'已打断，正在听。':'已打断回复。');};
