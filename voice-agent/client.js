@@ -37,7 +37,7 @@ function transcript(text,local) {
 async function loadVoices() {
   const voices=await json('/data/voices');
   for(const option of [...$('voice').options]) if(option.dataset.custom) option.remove();
-  for(const voice of voices) { const option=new Option(voice.name+' · reference voice',voice.id); option.dataset.custom='1'; $('voice').add(option); }
+  for(const voice of voices) { const option=new Option(voice.name+(voice.id.startsWith('ft-')?'':' · reference voice'),voice.id); option.dataset.custom='1'; $('voice').add(option); }
 }
 async function health() {
   try {
@@ -62,7 +62,7 @@ async function unlock() {
   await json('/session'); sessionStorage.setItem('voiceAccessKey',key);
   $('accessPanel').hidden=true; $('workspace').inert=false;
   status('已连接。可以开始语音或文字对话。');
-  await Promise.allSettled([loadVoices(),memoryStatus(true)]);
+  await Promise.allSettled([loadVoices(),memoryStatus(true),resumeFineTune()]);
 }
 $('accessForm').onsubmit=async event=>{ event.preventDefault(); key=$('accessKey').value.trim(); try { await unlock(); $('accessKey').value=''; } catch(error) { $('accessStatus').textContent=error.message; } };
 async function playResult(result,epoch) {
@@ -252,3 +252,44 @@ $('savePersona').onclick=async()=>{ $('savePersona').disabled=true; try {await a
 $('exportMemory').onclick=async event=>{event.preventDefault();try {const blob=await (await api('/data/memory/export')).blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='companion-memory.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){status(e.message,true);} };
 window.addEventListener('beforeunload',()=>stream?.getTracks().forEach(track=>track.stop()));
 (async()=>{await health();if(key)try{await unlock();}catch{sessionStorage.removeItem('voiceAccessKey');}setInterval(health,30000);})();
+
+let ftJob=null, ftTimer=null;
+const ftActive = new Set(['queued','preparing','training','exporting']);
+async function showFineTune(job) {
+  ftJob=job.job;
+  const running=ftActive.has(job.status);
+  $('ftStart').disabled=running;
+  $('ftCancel').hidden=!running;
+  $('ftProgress').hidden=false;
+  $('ftProgress').value=job.progress||0;
+  $('ftStatus').textContent=job.name+'：'+(job.error||job.phase||job.status)+(job.total_steps?' · '+(job.step||0)+' / '+job.total_steps+' 步':'');
+  clearTimeout(ftTimer);
+  if(running) ftTimer=setTimeout(pollFineTune,3000);
+  else if(job.status==='ready') {await loadVoices(); $('voice').value='ft-'+job.job;}
+}
+async function pollFineTune() {
+  if(!ftJob)return;
+  try {await showFineTune(await json('/ft/jobs/'+ftJob));}
+  catch(e) {$('ftStatus').textContent='进度暂时不可用：'+e.message;ftTimer=setTimeout(pollFineTune,10000);}
+}
+async function resumeFineTune() {
+  const jobs=await json('/ft/jobs');
+  const job=jobs.find(j=>ftActive.has(j.status));
+  if(job)await showFineTune(job);
+}
+$('ftForm').onsubmit=async event=>{
+  event.preventDefault();
+  const files=[...$('ftFiles').files];
+  if(files.length<2||files.length>20){$('ftStatus').textContent='请选择 2–20 个音频文件';return;}
+  if(files.some(f=>f.size>25*1024*1024)||files.reduce((a,f)=>a+f.size,0)>90*1024*1024){$('ftStatus').textContent='单文件最多 25MB，合计最多 90MB';return;}
+  $('ftStart').disabled=true;$('ftStatus').textContent='正在上传录音…';
+  try {const result=await json('/ft/jobs',{method:'POST',body:new FormData(event.target)});ftJob=result.job;await pollFineTune();}
+  catch(e){$('ftStatus').textContent=e.message;$('ftStart').disabled=false;}
+};
+$('ftCancel').onclick=async()=>{
+  if(!ftJob)return;
+  $('ftCancel').disabled=true;
+  try {await json('/ft/jobs/'+ftJob+'/cancel',{method:'POST'});$('ftStatus').textContent='已请求取消，将在当前处理步骤完成后停止';}
+  catch(e){$('ftStatus').textContent=e.message;}
+  finally {$('ftCancel').disabled=false;}
+};
