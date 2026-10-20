@@ -262,7 +262,7 @@ $('restartConversation').onclick=async()=>{
 $('endSession').onclick=()=>{ if(active) stopVoice(); else {generation++; cancelReply(); playback.pause(); finishConversation();} };
 $('call').onclick=startVoice;
 $('interrupt').onclick=()=>{generation++;cancelReply();status(active?'已打断，正在听。':'已打断回复。');};
-$('textCall').onclick=()=>{ $('message').focus(); status('输入文字后点击 Send，即可收到语音回复。'); };
+$('textCall').onclick=()=>{ $('chatPanel').scrollIntoView({behavior:'smooth',block:'start'}); $('message').focus({preventScroll:true}); status('输入文字后点击 Send，即可收到语音回复。'); };
 $('mute').onclick=()=>{
   if(!stream) return;
   const enabled=!stream.getAudioTracks()[0].enabled;
