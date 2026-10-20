@@ -33,7 +33,12 @@ async function runJob(path,options,epoch=generation,onProgress=null) {
   throw Error('处理超时，请稍后重试');
 }
 function post(data) { return {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}; }
+function dialogueText(text) {
+  const cues=new Set('neutral|happy|sad|excited|angry|surprised|calm|gentle tone|warm tone|serious tone|playful tone|whisper|low voice'.split('|'));
+  return text.replace(/\[([^\[\]\n]{1,96})\]/g,(all,body)=>body.split(',').every(x=>cues.has(x.trim().toLowerCase()))?'':all).replace(/\[[a-zA-Z ,]*$/,'').trimStart();
+}
 function transcript(text,local) {
+  if(!local)text=dialogueText(text);
   const p=document.createElement('p'); p.className=local?'user':'agent'; const speaker=document.createElement('span'); speaker.className=local?'user-label':'character-label'; speaker.textContent=(local?'You':displayName)+': '; p.append(speaker,document.createTextNode(text));
   $('transcript').append(p); $('transcript').scrollTop=$('transcript').scrollHeight;
 }
@@ -165,7 +170,7 @@ async function sendTurn(path,options,fromAudio=false) {
     audioQueue=new StreamingAudioQueue(outputContext,state=>status(state==='buffering'?'正在缓冲语音…':'正在回复…'));
     status(fromAudio?'正在识别语音…':'正在生成回复…');
     const response=await api(path.replace('/jobs/','/realtime/'),{...options,signal:controller.signal});
-    reader=response.body.getReader();const decoder=new TextDecoder();let pending='', paragraph,done=false;
+    reader=response.body.getReader();const decoder=new TextDecoder();let pending='', paragraph,replyText='',done=false;
     while(true) {
       const packet=await reader.read();if(packet.done)break;
       if(epoch!==generation)throw Error('对话已结束');
@@ -177,7 +182,8 @@ async function sendTurn(path,options,fromAudio=false) {
         if(event.type==='transcript')transcript(event.text,true);
         if(event.type==='text') {
           if(!paragraph) {transcript('',false);paragraph=$('transcript').lastElementChild;}
-          paragraph.textContent+=event.delta;
+          replyText+=event.delta;
+          paragraph.lastChild.textContent=dialogueText(replyText);
           $('transcript').scrollTop=$('transcript').scrollHeight;
         }
         if(event.type==='audio') {queuePCM(event);}
