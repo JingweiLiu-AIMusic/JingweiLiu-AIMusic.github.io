@@ -1,6 +1,7 @@
 const $ = id => document.getElementById(id);
 let endpoint = '', key = sessionStorage.getItem('voiceAccessKey') || '', active = false, busy = false, stream, recorder, context, detector, audioUrl, generation = 0;
 let callVoice, callPrompt;
+let displayName="Jennifer · Private Companion", avatarUrl;
 let personaLoaded=false, personaDirty=false, personaBusy=false;
 let session = crypto.randomUUID();
 const playback = new Audio();
@@ -32,9 +33,52 @@ async function runJob(path,options,epoch=generation,onProgress=null) {
 }
 function post(data) { return {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}; }
 function transcript(text,local) {
-  const p=document.createElement('p'); p.className=local?'user':'agent'; p.textContent=(local?'You: ':'Jennifer: ')+text;
+  const p=document.createElement('p'); p.className=local?'user':'agent'; const speaker=document.createElement('span'); speaker.className=local?'user-label':'character-label'; speaker.textContent=(local?'You':displayName)+': '; p.append(speaker,document.createTextNode(text));
   $('transcript').append(p); $('transcript').scrollTop=$('transcript').scrollHeight;
 }
+function applyProfile(profile) {
+  displayName=profile.name;
+  $('conversationTitle').textContent=displayName; document.title=displayName;
+  $('conversationName').value=displayName;
+  document.querySelectorAll('.character-label').forEach(label=>label.textContent=displayName+': ');
+}
+async function loadAvatar() {
+  const blob=await (await api('/profile/avatar')).blob();
+  const previous=avatarUrl; avatarUrl=URL.createObjectURL(blob);
+  $('characterAvatar').src=avatarUrl; $('characterAvatar').hidden=false;
+  $('avatarPlaceholder').hidden=true;
+  if(previous)URL.revokeObjectURL(previous);
+}
+async function loadProfile() {
+  try {
+    const profile=await json('/profile'); applyProfile(profile);
+    $('saveProfile').disabled=false;
+    if(profile.has_avatar)await loadAvatar();
+  } catch(e) { $('profileStatus').textContent='展示设置加载失败：'+e.message; }
+}
+$('profileForm').onsubmit=async event=>{
+  event.preventDefault(); const name=$('conversationName').value.trim();
+  if(!name)return;
+  $('saveProfile').disabled=true; $('conversationName').readOnly=true;
+  $('profileStatus').textContent='正在保存…';
+  try {
+    const profile=await json('/profile',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    applyProfile(profile); $('profileStatus').textContent='名称已保存';
+  } catch(e) { $('profileStatus').textContent='保存失败：'+e.message; }
+  finally { $('saveProfile').disabled=false; $('conversationName').readOnly=false; }
+};
+$('uploadAvatar').onclick=()=>{ $('avatarFile').value=''; $('avatarFile').click(); };
+$('avatarFile').onchange=async()=>{
+  const file=$('avatarFile').files[0]; if(!file)return;
+  if(!file.size || file.size>8*1024*1024) { $('avatarStatus').textContent='请选择非空、最大 8MB 的照片'; return; }
+  $('uploadAvatar').disabled=true; $('avatarStatus').textContent='正在上传并保存头像…';
+  const data=new FormData(); data.append('file',file);
+  try {
+    await json('/profile/avatar',{method:'POST',body:data});
+    await loadAvatar(); $('avatarStatus').textContent='头像已保存，刷新后仍会显示';
+  } catch(e) { $('avatarStatus').textContent='头像处理失败：'+e.message; }
+  finally { $('uploadAvatar').disabled=false; }
+};
 async function loadVoices() {
   const voices=await json('/data/voices');
   for(const option of [...$('voice').options]) if(option.dataset.custom) option.remove();
@@ -63,7 +107,7 @@ async function unlock() {
   await json('/session'); sessionStorage.setItem('voiceAccessKey',key);
   $('accessPanel').hidden=true; $('workspace').inert=false;
   status('已连接。可以开始语音或文字对话。');
-  await Promise.allSettled([loadVoices(),memoryStatus(true),resumeFineTune(),loadPersona()]);
+  await Promise.allSettled([loadVoices(),memoryStatus(true),resumeFineTune(),loadPersona(),loadProfile()]);
 }
 $('accessForm').onsubmit=async event=>{ event.preventDefault(); key=$('accessKey').value.trim(); try { await unlock(); $('accessKey').value=''; } catch(error) { $('accessStatus').textContent=error.message; } };
 async function playResult(result,epoch) {
