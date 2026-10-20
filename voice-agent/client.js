@@ -78,26 +78,21 @@ async function playResult(result,epoch) {
   }
   if(result.audio_error) status(result.audio_error,true);
 }
-let outputContext, nextAudioTime=0, turnAbort;
-const audioSources=new Set();
+let outputContext, audioQueue, turnAbort;
 async function prepareAudio() {
   if(!outputContext||outputContext.state==='closed') outputContext=new AudioContext();
   await outputContext.resume();
 }
 function cancelReply() {
   turnAbort?.abort();
-  for(const source of audioSources) { try {source.stop();} catch {} }
-  audioSources.clear(); nextAudioTime=0;
+  audioQueue?.cancel();
 }
 function queuePCM(event) {
   const raw=atob(event.pcm), bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));
   const view=new DataView(bytes.buffer), buffer=outputContext.createBuffer(1,bytes.length/2,event.sample_rate);
   const channel=buffer.getChannelData(0);
   for(let i=0;i<channel.length;i++) channel[i]=view.getInt16(i*2,true)/32768;
-  const source=outputContext.createBufferSource();source.buffer=buffer;source.connect(outputContext.destination);
-  const when=Math.max(outputContext.currentTime+0.12,nextAudioTime);
-  source.start(when);nextAudioTime=when+buffer.duration;audioSources.add(source);
-  source.onended=()=>audioSources.delete(source);
+  audioQueue.push(buffer);
 }
 async function sendTurn(path,options,fromAudio=false) {
   if(busy) return;
@@ -106,7 +101,8 @@ async function sendTurn(path,options,fromAudio=false) {
   const timeout=setTimeout(()=>controller.abort(),600000);
   let reader;
   try {
-    await prepareAudio();nextAudioTime=0;
+    await prepareAudio();
+    audioQueue=new StreamingAudioQueue(outputContext,state=>status(state==='buffering'?'正在缓冲语音…':'正在回复…'));
     status(fromAudio?'正在识别语音…':'正在生成回复…');
     const response=await api(path.replace('/jobs/','/realtime/'),{...options,signal:controller.signal});
     reader=response.body.getReader();const decoder=new TextDecoder();let pending='', paragraph,done=false;
@@ -124,13 +120,13 @@ async function sendTurn(path,options,fromAudio=false) {
           paragraph.textContent+=event.delta;
           $('transcript').scrollTop=$('transcript').scrollHeight;
         }
-        if(event.type==='audio') {queuePCM(event);status('正在回复…');}
+        if(event.type==='audio') {queuePCM(event);}
         if(event.type==='error')throw Error(event.detail);
-        if(event.type==='done')done=true;
+        if(event.type==='done'){done=true;audioQueue.finish();}
       }
     }
     if(!done)throw Error('连接中断，请重试');
-    while(audioSources.size&&epoch===generation)await new Promise(resolve=>setTimeout(resolve,80));
+    while(!audioQueue.drained&&epoch===generation)await new Promise(resolve=>setTimeout(resolve,80));
     if(epoch===generation) {
       memoryStatus().catch(()=>{});
       status(active?'正在听，请继续说话。':'已回复。');
