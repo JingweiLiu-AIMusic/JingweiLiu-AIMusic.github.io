@@ -1,6 +1,7 @@
 const $ = id => document.getElementById(id);
 let endpoint = '', key = sessionStorage.getItem('voiceAccessKey') || '', active = false, busy = false, stream, recorder, context, detector, audioUrl, generation = 0;
 let callVoice, callPrompt;
+let voicesLoaded=false, voiceSave=Promise.resolve();
 let displayName="Jennifer · Private Companion", avatarUrl;
 let personaLoaded=false, personaDirty=false, personaBusy=false;
 let session = crypto.randomUUID();
@@ -79,10 +80,21 @@ $('avatarFile').onchange=async()=>{
   } catch(e) { $('avatarStatus').textContent='头像处理失败：'+e.message; }
   finally { $('uploadAvatar').disabled=false; }
 };
+function rememberVoice(voice=$('voice').value) {
+  localStorage.setItem('preferredVoice',voice);
+  voiceSave=voiceSave.catch(()=>{}).then(()=>json('/profile/voice',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({voice})}));
+  voiceSave.then(()=>{$('voiceStatus').textContent='已记住此音色，下次连接自动选中';}).catch(()=>{$('voiceStatus').textContent='音色已在此浏览器记住，服务器同步暂未成功';});
+  return voiceSave;
+}
+$('voice').onchange=()=>{rememberVoice().catch(()=>{});};
 async function loadVoices() {
-  const voices=await json('/data/voices');
+  const current=$('voice').value;
+  const [voices,preference]=await Promise.all([json('/data/voices'),json('/profile/voice')]);
   for(const option of [...$('voice').options]) if(option.dataset.custom) option.remove();
   for(const voice of voices) { const option=new Option(voice.name+(voice.id.startsWith('ft-')?'':' · reference voice'),voice.id); option.dataset.custom='1'; $('voice').add(option); }
+  const wanted=voicesLoaded?current:(preference.voice||localStorage.getItem('preferredVoice'));
+  if(wanted && [...$('voice').options].some(option=>option.value===wanted))$('voice').value=wanted;
+  voicesLoaded=true;
 }
 async function health() {
   try {
@@ -202,7 +214,7 @@ async function startVoice() {
     context=new AudioContext(); await context.resume();
     const analyser=context.createAnalyser(); analyser.fftSize=2048; context.createMediaStreamSource(stream).connect(analyser);
     const samples=new Float32Array(analyser.fftSize);
-    active=true; callVoice=$('voice').value; callPrompt=$('prompt').value;
+    active=true; callVoice=$('voice').value; rememberVoice(callVoice).catch(()=>{}); callPrompt=$('prompt').value;
     $('call').textContent='结束语音对话'; $('mute').disabled=false; $('mute').textContent='静音'; $('orb').classList.add('active');
     status('正在听。说完后会自动识别并回复。');
     let lastSound=0,start=0,heard=false;
@@ -274,10 +286,12 @@ $('messageForm').onsubmit=event=>{
   event.preventDefault(); const text=$('message').value.trim(); if(!text||busy) return;
   if(recorder?.state==='recording') {recorder.onstop=null;recorder.stop();}
   transcript(text,true); $('message').value='';
+  rememberVoice(active?callVoice:$('voice').value).catch(()=>{});
   sendTurn('/jobs/turn',post({text,voice:active?callVoice:$('voice').value,prompt:active?callPrompt:$('prompt').value,session}));
 };
 $('preview').onclick=async()=>{
   if(active||busy) return status('请先结束语音对话并等待回复完成，再试听音色。');
+  rememberVoice().catch(()=>{});
   $('preview').disabled=true;
   try { status('正在生成试听…'); const result=await runJob('/jobs/preview',post({voice:$('voice').value,text:$('previewText').value.trim()})); await playResult(result,generation); status('试听已生成'); }
   catch(error) {status(error.message,true);} finally {$('preview').disabled=false;}
@@ -288,7 +302,7 @@ $('clone').onsubmit=async event=>{
   $('cloneButton').disabled=true; $('cloneStatus').textContent='正在上传并处理，请稍候…';
   try {
     const result=await runJob('/jobs/voice',{method:'POST',body:new FormData(event.target)});
-    await loadVoices(); $('voice').value=result.voice.id; event.target.reset();
+    await loadVoices(); $('voice').value=result.voice.id; rememberVoice().catch(()=>{}); event.target.reset();
     $('cloneStatus').textContent='已创建并选中：'+result.voice.name+'。可试听；下一次语音对话生效。';
   } catch(error) { $('cloneStatus').textContent=error.message; } finally { $('cloneButton').disabled=false; }
 };
@@ -352,7 +366,7 @@ async function showFineTune(job) {
   $('ftStatus').textContent=job.name+'：'+(job.error||job.phase||job.status)+(job.total_steps?' · '+(job.step||0)+' / '+job.total_steps+' 步':'');
   clearTimeout(ftTimer);
   if(running) ftTimer=setTimeout(pollFineTune,3000);
-  else if(job.status==='ready') {await loadVoices(); $('voice').value='ft-'+job.job;}
+  else if(job.status==='ready') {await loadVoices(); $('voice').value='ft-'+job.job;rememberVoice().catch(()=>{});}
 }
 async function pollFineTune() {
   if(!ftJob)return;
