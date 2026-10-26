@@ -212,6 +212,17 @@ function stopVoice(consolidate=true) {
   $('call').textContent='开始语音对话'; $('mute').disabled=true; $('orb').classList.remove('active'); status('语音对话已结束');
   if(consolidate) finishConversation();
 }
+// Pause-tolerant endpointing. Keep quiet syllables after speech has started.
+class VoiceEndpoint {
+  constructor(now) { this.started=now;this.lastSound=now;this.heard=false; }
+  update(rms,now) {
+    if(rms>(this.heard?0.004:0.008)) { this.heard=true;this.lastSound=now; }
+    if(this.heard && now-this.lastSound>=1800)return 'send';
+    // Rotate an empty recording only; never cut off continuous speech at 30 s.
+    if(!this.heard && now-this.started>=30000)return 'discard';
+    return null;
+  }
+}
 async function startVoice() {
   if(active) return stopVoice();
   if(busy) return status('请等待当前回复完成');
@@ -223,28 +234,29 @@ async function startVoice() {
     const samples=new Float32Array(analyser.fftSize);
     active=true; callVoice=$('voice').value; rememberVoice(callVoice).catch(()=>{}); callPrompt=$('prompt').value;
     $('call').textContent='结束语音对话'; $('mute').disabled=false; $('mute').textContent='静音'; $('orb').classList.add('active');
-    status('正在听。说完后会自动识别并回复。');
-    let lastSound=0,start=0,heard=false;
+    status('正在听。停顿约 1.8 秒后识别，短暂停顿可继续说。');
+    let endpointing,stopping=false;
     function record() {
-      if(!active||busy||!stream.getAudioTracks()[0].enabled) return;
+      if(!active||busy||stopping||!stream.getAudioTracks()[0].enabled) return;
       const parts=[];
       const mime=['audio/webm;codecs=opus','audio/mp4','audio/webm'].find(type=>MediaRecorder.isTypeSupported(type));
       recorder=new MediaRecorder(stream,mime?{mimeType:mime}:{});
       recorder.ondataavailable=e=>{if(e.data.size) parts.push(e.data);};
       recorder.onstop=()=>{
-        if(!active||!heard) return;
+        stopping=false;
+        if(!active||!endpointing.heard) return;
         const blob=new Blob(parts,{type:recorder.mimeType});
         sendTurn('/jobs/recording',{method:'POST',headers:{'X-Voice':encodeURIComponent(callVoice),'X-Session':session,'X-Prompt':encodeURIComponent(callPrompt)},body:blob},true);
       };
-      start=Date.now(); lastSound=start; heard=false; recorder.start();
+      endpointing=new VoiceEndpoint(performance.now()); recorder.start();
     }
     detector=setInterval(()=>{
-      if(!active||busy||!stream.getAudioTracks()[0].enabled) return;
+      if(!active||busy||stopping||!stream.getAudioTracks()[0].enabled) return;
       if(!recorder||recorder.state==='inactive') record();
       analyser.getFloatTimeDomainData(samples);
       const rms=Math.sqrt(samples.reduce((sum,x)=>sum+x*x,0)/samples.length);
-      if(rms>0.018) { heard=true; lastSound=Date.now(); }
-      if(recorder?.state==='recording' && ((heard&&Date.now()-lastSound>550&&Date.now()-start>750)||Date.now()-start>30000)) recorder.stop();
+      const decision=endpointing.update(rms,performance.now());
+      if(recorder?.state==='recording' && decision) {stopping=true;recorder.stop();}
     },100);
   } catch(error) { stopVoice(false); status('无法打开麦克风：'+error.message,true); }
 }
