@@ -124,7 +124,7 @@ async function unlock() {
   await json('/session'); sessionStorage.setItem('voiceAccessKey',key);
   $('accessPanel').hidden=true; $('workspace').inert=false;
   status('已连接。可以开始语音或文字对话。');
-  await Promise.allSettled([loadVoices(),memoryStatus(true),resumeFineTune(),loadPersona(),loadProfile()]);
+  await Promise.allSettled([loadVoices(),memoryStatus(true),loadPersona(),loadProfile()]);
 }
 $('accessForm').onsubmit=async event=>{ event.preventDefault(); key=$('accessKey').value.trim(); try { await unlock(); $('accessKey').value=''; } catch(error) { $('accessStatus').textContent=error.message; } };
 async function playResult(result,epoch) {
@@ -163,7 +163,7 @@ async function sendTurn(path,options,fromAudio=false) {
   if(busy) return;
   busy=true; $('send').disabled=true; $('interrupt').disabled=false; const epoch=generation;
   const controller=new AbortController();turnAbort=controller;
-  const timeout=setTimeout(()=>controller.abort(),600000);
+
   let reader;
   try {
     await prepareAudio();
@@ -179,6 +179,7 @@ async function sendTurn(path,options,fromAudio=false) {
       while((newline=pending.indexOf('\n'))>=0) {
         const line=pending.slice(0,newline);pending=pending.slice(newline+1);if(!line)continue;
         const event=JSON.parse(line);
+        if(event.type==='phase')status(event.stage==='thinking'?'正在思考…':'正在识别语音…');
         if(event.type==='transcript')transcript(event.text,true);
         if(event.type==='text') {
           if(!paragraph) {transcript('',false);paragraph=$('transcript').lastElementChild;}
@@ -200,7 +201,7 @@ async function sendTurn(path,options,fromAudio=false) {
   } catch(error) {
     cancelReply();if(epoch===generation)status(error.message,true);
   } finally {
-    clearTimeout(timeout);reader?.releaseLock();if(turnAbort===controller)turnAbort=null;
+    reader?.releaseLock();if(turnAbort===controller)turnAbort=null;
     busy=false; $('send').disabled=false; $('interrupt').disabled=true;
   }
 }
@@ -384,15 +385,7 @@ async function resumeFineTune() {
   const job=jobs.find(j=>ftActive.has(j.status));
   if(job)await showFineTune(job);
 }
-$('ftForm').onsubmit=async event=>{
-  event.preventDefault();
-  const files=[...$('ftFiles').files];
-  if(files.length<2||files.length>20){$('ftStatus').textContent='请选择 2–20 个音频文件';return;}
-  if(files.some(f=>f.size>25*1024*1024)||files.reduce((a,f)=>a+f.size,0)>90*1024*1024){$('ftStatus').textContent='单文件最多 25MB，合计最多 90MB';return;}
-  $('ftStart').disabled=true;$('ftStatus').textContent='正在上传录音…';
-  try {const result=await json('/ft/jobs',{method:'POST',body:new FormData(event.target)});ftJob=result.job;await pollFineTune();}
-  catch(e){$('ftStatus').textContent=e.message;$('ftStart').disabled=false;}
-};
+$('ftForm').onsubmit=event=>{event.preventDefault();$('ftStatus').textContent='Drama 3 官方微调流程尚未接入，请使用参考音色克隆。';};
 $('ftCancel').onclick=async()=>{
   if(!ftJob)return;
   $('ftCancel').disabled=true;
