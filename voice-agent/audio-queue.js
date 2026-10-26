@@ -3,7 +3,7 @@ class StreamingAudioQueue {
   constructor(context, onState=()=>{}) {
     this.context=context;this.onState=onState;this.pending=[];this.sources=new Set();
     this.seconds=0;this.end=0;this.playing=false;this.finished=false;this.cancelled=false;
-    this.target=4;this.firstArrival=null;this.total=0;this.underruns=0;
+    this.target=1.5;this.hasPlayed=false;this.firstArrival=null;this.total=0;this.underruns=0;
   }
   push(buffer) {
     if(this.cancelled)return;
@@ -16,18 +16,16 @@ class StreamingAudioQueue {
     if(this.cancelled)return;
     const now=this.context.currentTime;
     if(this.playing && this.pending.length && this.end<now+0.025) {
-      this.playing=false;this.underruns++;this.target=Math.min(8,this.target+2);
+      this.playing=false;this.underruns++;
     }
     if(!this.playing) {
-      // Keep a reserve for phrase restarts and network jitter. Short replies flush at EOF.
-      const elapsed=now-(this.firstArrival??now);
-      const rate=elapsed>0.5?this.total/elapsed:1;
-      const target=Math.min(8,Math.max(this.target,rate<1?this.target+(1-rate)*12:this.target));
-      if(!this.finished && (this.seconds<target || elapsed<(this.target>=4?1.5:0))) {
+      // Reserve audio once at startup. After a gap, play newly arrived audio
+      // immediately instead of adding another 3.5–8 seconds of rebuffering.
+      if(!this.finished && !this.hasPlayed && this.seconds<this.target) {
         this.onState('buffering');return;
       }
       if(!this.pending.length)return;
-      this.playing=true;this.end=now+0.08;this.onState('playing');
+      this.playing=true;this.hasPlayed=true;this.end=now+0.08;this.onState('playing');
     }
     for(const buffer of this.pending) {
       const source=this.context.createBufferSource();source.buffer=buffer;source.connect(this.context.destination);
